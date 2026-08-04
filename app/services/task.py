@@ -513,48 +513,71 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
     Returns:
         - subtitle_path: path to the generated subtitle file
     '''
-    logger.info("\n\n## generating subtitle")
+    logger.info("""\n\n## generating subtitle""")
     if not params.subtitle_enabled:
         return ""
 
     subtitle_path = path.join(utils.task_dir(task_id), "subtitle.srt")
-    subtitle_provider = config.app.get("subtitle_provider", "edge").strip().lower()
-    logger.info(f"\n\n## generating subtitle, provider: {subtitle_provider}")
+    subtitle_provider = config.app.get("subtitle_provider", "edge")
+    
+    # Handle both string and array formats for subtitle_provider
+    if isinstance(subtitle_provider, list):
+        subtitle_providers = [p.strip().lower() for p in subtitle_provider if p]
+    else:
+        subtitle_provider = subtitle_provider.strip().lower()
+        subtitle_providers = [subtitle_provider] if subtitle_provider else []
+    
+    logger.info(f"""\n\n## generating subtitle, providers: {subtitle_providers}""")
 
-    if not subtitle_provider:
+    if not subtitle_providers:
         logger.info("subtitle provider is empty, skip subtitle generation")
         return ""
 
-    if sub_maker is None and subtitle_provider != "whisper":
-        # 自定义音频不会经过 TTS，因此没有 Edge/Azure 等 TTS 返回的
-        # sub_maker 时间轴。只有 Whisper 可以直接从音频文件转写字幕；
-        # 其他字幕提供方继续保持原有行为，避免生成错误的空时间轴。
+    if sub_maker is None and "whisper" not in subtitle_providers:
+        # Custom audio doesn't go through TTS, so no Edge/Azure sub_maker timestamps.
+        # Only Whisper can transcribe directly from audio file;
+        # other subtitle providers keep original behavior to avoid generating empty timestamps.
         logger.warning(
-            "subtitle maker is missing, skip subtitle generation for provider: "
-            f"{subtitle_provider}"
+            "subtitle maker is missing, skip subtitle generation for providers: "
+            f"{subtitle_providers}"
         )
         return ""
 
-    if subtitle_provider == "edge":
-        voice.create_subtitle(
-            text=video_script, sub_maker=sub_maker, subtitle_file=subtitle_path
-        )
-        if not os.path.exists(subtitle_path):
-            # Edge 字幕偶尔会因为时间轴与文案无法匹配而没有产出文件。这里不能
-            # 自动切换到 Whisper，否则首次失败会在用户不知情的情况下下载数 GB
-            # 的模型。只有显式配置 Whisper 时才允许加载模型，Edge 失败则保留
-            # 无字幕视频并记录原因，避免意外的网络和磁盘开销。
-            logger.warning(
-                "edge subtitle generation did not produce a subtitle file; "
-                "skip subtitles without falling back to whisper"
+    # Try each provider in order until one succeeds
+    for provider in subtitle_providers:
+        logger.info(f"trying subtitle provider: {provider}")
+        
+        if provider == "edge":
+            voice.create_subtitle(
+                text=video_script, sub_maker=sub_maker, subtitle_file=subtitle_path
             )
-            return ""
-
-    if subtitle_provider == "whisper":
-        subtitle.create(audio_file=audio_file, subtitle_file=subtitle_path)
-        logger.info("\n\n## correcting subtitle")
-        subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
-
+            if os.path.exists(subtitle_path):
+                logger.success(f"subtitle generated successfully with provider: {provider}")
+                break
+            else:
+                # Edge subtitle occasionally fails to produce file due to timeline/script mismatch.
+                # Continue to next provider in fallback chain.
+                logger.warning(
+                    f"edge subtitle generation did not produce a subtitle file; "
+                    f"trying next provider in fallback chain"
+                )
+                continue
+        
+        elif provider == "whisper":
+            subtitle.create(audio_file=audio_file, subtitle_file=subtitle_path)
+            logger.info("""\n\n## correcting subtitle""")
+            subtitle.correct(subtitle_file=subtitle_path, video_script=video_script)
+            if os.path.exists(subtitle_path):
+                logger.success(f"subtitle generated successfully with provider: {provider}")
+                break
+            else:
+                logger.warning(f"whisper subtitle generation failed; trying next provider")
+                continue
+        
+        else:
+            logger.warning(f"unknown subtitle provider: {provider}, skipping")
+            continue
+    
     subtitle_lines = subtitle.file_to_subtitles(subtitle_path)
     if not subtitle_lines:
         logger.warning(f"subtitle file is invalid: {subtitle_path}")
