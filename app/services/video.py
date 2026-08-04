@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+import math
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
 from typing import List
@@ -21,9 +22,11 @@ from moviepy import (
     TextClip,
     VideoFileClip,
     afx,
+    vfx,
 )
 from moviepy.video.tools.subtitles import SubtitlesClip
 from PIL import Image, ImageDraw, ImageFont
+from xml.sax.saxutils import escape, unescape
 
 from app.config import config
 from app.models import const
@@ -37,6 +40,420 @@ from app.models.schema import (
 from app.services import bgm as bgm_service
 from app.services.utils import video_effects
 from app.utils import file_security, utils
+
+# =============================================================================
+# Branding Configuration
+# =============================================================================
+
+class BrandingConfig:
+    """Branding configuration parsed from config.toml [branding] section."""
+    def __init__(self):
+        branding = config.app.get("branding", {}) or {}
+        
+        # Logo watermark
+        self.logo_path = branding.get("logo_path", "")
+        self.logo_position = branding.get("logo_position", "top-right")
+        self.logo_opacity = float(branding.get("logo_opacity", 0.8))
+        self.logo_scale = float(branding.get("logo_scale", 0.15))
+        
+        # Intro
+        self.intro_enabled = branding.get("intro_enabled", True)
+        self.intro_duration = float(branding.get("intro_duration", 2.5))
+        self.intro_logo_path = branding.get("intro_logo_path", "")
+        self.intro_text = branding.get("intro_text", "SmartSMB")
+        self.intro_tagline = branding.get("intro_tagline", "Never Miss a Lead")
+        self.intro_animation = branding.get("intro_animation", "fade-in")
+        self.intro_bg_color = branding.get("intro_bg_color", "#0F172A")
+        self.intro_text_color = branding.get("intro_text_color", "#FFFFFF")
+        self.intro_accent_color = branding.get("intro_accent_color", "#00D4AA")
+        
+        # Outro
+        self.outro_enabled = branding.get("outro_enabled", True)
+        self.outro_duration = float(branding.get("outro_duration", 3.0))
+        self.outro_logo_path = branding.get("outro_logo_path", "")
+        self.outro_text = branding.get("outro_text", "Book a Free Lead Leak Audit")
+        self.outro_cta = branding.get("outro_cta", "smartsmb.ai")
+        self.outro_animation = branding.get("outro_animation", "fade-out")
+        self.outro_bg_color = branding.get("outro_bg_color", "#0F172A")
+        self.outro_text_color = branding.get("outro_text_color", "#FFFFFF")
+        
+        # Color grading
+        self.lut_enabled = branding.get("lut_enabled", True)
+        self.lut_path = branding.get("lut_path", "")
+        self.lut_intensity = float(branding.get("lut_intensity", 1.0))
+        
+        # Transitions
+        self.transition_mode = branding.get("transition_mode", "crossfade")
+        self.transition_duration = float(branding.get("transition_duration", 1.0))
+        
+        # Kinetic typography
+        self.kinetic_enabled = branding.get("kinetic_enabled", True)
+        self.kinetic_style = branding.get("kinetic_style", "pop")
+        self.kinetic_pop_scale = float(branding.get("kinetic_pop_scale", 1.3))
+        self.kinetic_slide_distance = int(branding.get("kinetic_slide_distance", 50))
+
+
+def get_branding_config() -> BrandingConfig:
+    """Get branding config singleton."""
+    return BrandingConfig()
+
+
+def _parse_hex_color(color: str, default: tuple = (0, 0, 0)) -> tuple:
+    """Parse hex color string to RGB tuple."""
+    if isinstance(color, str) and color.startswith("#") and len(color) == 7:
+        try:
+            return (int(color[1:3], 16), int(color[3:5], 16), int(color[5:7], 16))
+        except ValueError:
+            pass
+    return default
+
+
+def _position_to_coords(position: str, video_width: int, video_height: int, 
+                        element_width: int, element_height: int, margin: int = 20) -> tuple:
+    """Convert position string to (x, y) coordinates."""
+    positions = {
+        "top-left": (margin, margin),
+        "top-right": (video_width - element_width - margin, margin),
+        "bottom-left": (margin, video_height - element_height - margin),
+        "bottom-right": (video_width - element_width - margin, video_height - element_height - margin),
+        "center": ((video_width - element_width) // 2, (video_height - element_height) // 2),
+    }
+    return positions.get(position, positions["top-right"])
+
+
+def _create_intro_clip(branding: BrandingConfig, video_width: int, video_height: int) -> CompositeVideoClip | None:
+    """Create branded intro clip."""
+    if not branding.intro_enabled:
+        return None
+    
+    clips = []
+    duration = branding.intro_duration
+    
+    # Background
+    bg_color = _parse_hex_color(branding.intro_bg_color)
+    bg_clip = ColorClip(size=(video_width, video_height), color=bg_color).with_duration(duration)
+    clips.append(bg_clip)
+    
+    # Logo
+    if branding.intro_logo_path and os.path.exists(branding.intro_logo_path):
+        try:
+            logo_clip = ImageClip(branding.intro_logo_path).with_duration(duration)
+            target_width = int(video_width * 0.4)
+            logo_clip = logo_clip.resized(width=target_width)
+            logo_clip = logo_clip.with_position("center").with_start(0.5)
+            clips.append(logo_clip)
+        except Exception as e:
+            logger.warning(f"Failed to load intro logo: {e}")
+    
+    # Text
+    text_color = _parse_hex_color(branding.intro_text_color, (255, 255, 255))
+    accent_color = _parse_hex_color(branding.intro_accent_color, (0, 212, 170))
+    
+    # Main text and tagline
+    try:
+        font_path = os.path.join(utils.font_dir(), "STHeitiMedium.ttc")
+        if not os.path.exists(font_path):
+            font_path = os.path.join(utils.font_dir(), "arial.ttf")
+    except Exception:
+        font_path = None
+    
+    if font_path and os.path.exists(font_path):
+        try:
+            main_text = TextClip(
+                text=branding.intro_text,
+                font=font_path,
+                font_size=int(video_height * 0.12),
+                color=text_color,
+                stroke_color=(0, 0, 0),
+                stroke_width=3,
+            ).with_duration(duration - 0.5).with_start(0.5).with_position(("center", video_height * 0.35))
+            clips.append(main_text)
+            
+            tagline = TextClip(
+                text=branding.intro_tagline,
+                font=font_path,
+                font_size=int(video_height * 0.05),
+                color=accent_color,
+                stroke_color=(0, 0, 0),
+                stroke_width=2,
+            ).with_duration(duration - 1.0).with_start(1.0).with_position(("center", video_height * 0.5))
+            clips.append(tagline)
+        except Exception as e:
+            logger.warning(f"Failed to create intro text: {e}")
+    else:
+        logger.warning("Font not found, skipping intro text")
+    
+    if len(clips) <= 1:
+        return None
+    
+    intro = CompositeVideoClip(clips, size=(video_width, video_height))
+    
+    # Apply intro animation
+    if branding.intro_animation == "fade-in":
+        intro = intro.with_effects([vfx.FadeIn(0.5)])
+    elif branding.intro_animation == "slide-up":
+        intro = intro.with_position(lambda t: ("center", video_height - int(video_height * t / duration)))
+    elif branding.intro_animation == "zoom-in":
+        intro = intro.resized(lambda t: 0.5 + 0.5 * (t / duration))
+    
+    return intro
+
+
+def _create_outro_clip(branding: BrandingConfig, video_width: int, video_height: int) -> CompositeVideoClip | None:
+    """Create branded outro clip with CTA."""
+    if not branding.outro_enabled:
+        return None
+    
+    clips = []
+    duration = branding.outro_duration
+    
+    # Background
+    bg_color = _parse_hex_color(branding.outro_bg_color)
+    bg_clip = ColorClip(size=(video_width, video_height), color=bg_color).with_duration(duration)
+    clips.append(bg_clip)
+    
+    # Logo
+    if branding.outro_logo_path and os.path.exists(branding.outro_logo_path):
+        try:
+            logo_clip = ImageClip(branding.outro_logo_path).with_duration(duration)
+            target_width = int(video_width * 0.3)
+            logo_clip = logo_clip.resized(width=target_width)
+            logo_clip = logo_clip.with_position("center").with_start(0.3)
+            clips.append(logo_clip)
+        except Exception as e:
+            logger.warning(f"Failed to load outro logo: {e}")
+    
+    # Text
+    text_color = _parse_hex_color(branding.outro_text_color, (255, 255, 255))
+    
+    try:
+        font_path = os.path.join(utils.font_dir(), "STHeitiMedium.ttc")
+        if not os.path.exists(font_path):
+            font_path = os.path.join(utils.font_dir(), "arial.ttf")
+    except Exception:
+        font_path = None
+    
+    if font_path and os.path.exists(font_path):
+        try:
+            main_text = TextClip(
+                text=branding.outro_text,
+                font=font_path,
+                font_size=int(video_height * 0.08),
+                color=text_color,
+                stroke_color=(0, 0, 0),
+                stroke_width=3,
+            ).with_duration(duration - 0.5).with_start(0.3).with_position(("center", video_height * 0.35))
+            clips.append(main_text)
+            
+            cta_text = TextClip(
+                text=branding.outro_cta,
+                font=font_path,
+                font_size=int(video_height * 0.05),
+                color=text_color,
+                stroke_color=(0, 0, 0),
+                stroke_width=2,
+            ).with_duration(duration - 1.0).with_start(1.0).with_position(("center", video_height * 0.55))
+            clips.append(cta_text)
+        except Exception as e:
+            logger.warning(f"Failed to create outro text: {e}")
+    else:
+        logger.warning("Font not found, skipping outro text")
+    
+    if len(clips) <= 1:
+        return None
+    
+    outro = CompositeVideoClip(clips, size=(video_width, video_height))
+    
+    # Apply outro animation
+    if branding.outro_animation == "fade-out":
+        outro = outro.with_effects([vfx.FadeOut(0.5)])
+    elif branding.outro_animation == "slide-down":
+        outro = outro.with_position(lambda t: ("center", int(video_height * t / duration)))
+    
+    return outro
+
+
+def _create_watermark_clip(branding: BrandingConfig, video_width: int, video_height: int, 
+                           total_duration: float) -> ImageClip | None:
+    """Create persistent logo watermark."""
+    if not branding.logo_path or not os.path.exists(branding.logo_path):
+        return None
+    
+    try:
+        watermark = ImageClip(branding.logo_path).with_duration(total_duration)
+        
+        # Scale
+        target_width = int(video_width * branding.logo_scale)
+        watermark = watermark.resized(width=target_width)
+        
+        # Opacity
+        watermark = watermark.with_opacity(branding.logo_opacity)
+        
+        # Position
+        pos = _position_to_coords(branding.logo_position, video_width, video_height, 
+                                  watermark.w, watermark.h)
+        watermark = watermark.with_position(pos)
+        
+        return watermark
+    except Exception as e:
+        logger.warning(f"Failed to create watermark: {e}")
+        return None
+
+
+def _apply_transition(clip1, clip2, transition_mode: str, duration: float):
+    """Apply transition between two clips."""
+    if transition_mode in (None, "none", ""):
+        return clip1, clip2  # No transition, clips play sequentially
+    
+    try:
+        if transition_mode == "crossfade":
+            # Overlap clips with crossfade
+            clip1 = clip1.with_effects([vfx.FadeOut(duration)])
+            clip2 = clip2.with_effects([vfx.FadeIn(duration)])
+            clip2 = clip2.with_start(clip1.duration - duration)
+            return clip1, clip2
+        
+        elif transition_mode in ("slide-left", "slide-right", "slide-up", "slide-down"):
+            # Slide transition - new clip slides in over old
+            w, h = clip1.size
+            if transition_mode == "slide-left":
+                clip2 = clip2.with_position(lambda t: (w * (1 - t/duration), 0) if t < duration else (0, 0))
+            elif transition_mode == "slide-right":
+                clip2 = clip2.with_position(lambda t: (-w * (1 - t/duration), 0) if t < duration else (0, 0))
+            elif transition_mode == "slide-up":
+                clip2 = clip2.with_position(lambda t: (0, h * (1 - t/duration)) if t < duration else (0, 0))
+            elif transition_mode == "slide-down":
+                clip2 = clip2.with_position(lambda t: (0, -h * (1 - t/duration)) if t < duration else (0, 0))
+            clip2 = clip2.with_start(clip1.duration - duration)
+            return clip1, clip2
+        
+        elif transition_mode == "push":
+            # Push transition - both clips move
+            w, h = clip1.size
+            clip1 = clip1.with_position(lambda t: (-w * t/duration, 0) if t < duration else (-w, 0))
+            clip2 = clip2.with_position(lambda t: (w * (1 - t/duration), 0) if t < duration else (0, 0))
+            clip2 = clip2.with_start(clip1.duration - duration)
+            return clip1, clip2
+        
+        elif transition_mode in ("zoom-in", "zoom-out"):
+            if transition_mode == "zoom-in":
+                clip2 = clip2.resized(lambda t: 0.5 + 0.5 * (t/duration) if t < duration else 1.0)
+            else:
+                clip1 = clip1.resized(lambda t: 1.0 - 0.5 * (t/duration) if t < duration else 0.5)
+            clip2 = clip2.with_start(clip1.duration - duration)
+            return clip1, clip2
+        
+    except Exception as e:
+        logger.warning(f"Transition {transition_mode} failed: {e}, falling back to hard cut")
+    
+    return clip1, clip2
+
+
+def _apply_lut_to_clip(input_path: str, output_path: str, lut_path: str, intensity: float = 1.0) -> bool:
+    """Apply LUT color grading to video clip using FFmpeg."""
+    if not lut_path or not os.path.exists(lut_path):
+        return False
+    
+    ffmpeg_binary = utils.get_ffmpeg_binary()
+    
+    if intensity >= 1.0:
+        # Full LUT
+        cmd = [
+            ffmpeg_binary, "-y",
+            "-i", input_path,
+            "-vf", f"lut3d=file={lut_path}",
+            "-c:a", "copy",
+            output_path
+        ]
+    else:
+        # Blend original with LUT
+        cmd = [
+            ffmpeg_binary, "-y",
+            "-i", input_path,
+            "-vf", f"lut3d=file={lut_path},blend=all_mode=normal:all_opacity={intensity}",
+            "-c:a", "copy",
+            output_path
+        ]
+    
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, check=False, timeout=120)
+        if result.returncode == 0:
+            logger.info(f"LUT applied successfully: {output_path}")
+            return True
+        else:
+            logger.error(f"LUT application failed: {result.stderr}")
+            return False
+    except Exception as e:
+        logger.error(f"LUT application error: {e}")
+        return False
+
+
+def _create_kinetic_subtitles(sub_maker, video_size: tuple, style: dict) -> CompositeVideoClip:
+    """Create word-level animated subtitles from SubMaker cues."""
+    clips = []
+    video_width, video_height = video_size
+    
+    font_path = style.get("font_path", "")
+    font_size = style.get("font_size", 60)
+    text_color = style.get("text_color", "#FFFFFF")
+    stroke_color = style.get("stroke_color", "#000000")
+    stroke_width = style.get("stroke_width", 1.5)
+    
+    # Parse color
+    def parse_color(c):
+        if isinstance(c, str) and c.startswith("#") and len(c) == 7:
+            try:
+                return (int(c[1:3], 16), int(c[3:5], 16), int(c[5:7], 16))
+            except:
+                pass
+        return (255, 255, 255)
+    
+    color = parse_color(text_color)
+    stroke = parse_color(stroke_color)
+    
+    for cue in sub_maker.cues:
+        word = unescape(cue.content)
+        start = cue.start.total_seconds()
+        end = cue.end.total_seconds()
+        word_duration = end - start
+        
+        if word_duration <= 0:
+            continue
+        
+        try:
+            txt_clip = TextClip(
+                word,
+                font=font_path,
+                font_size=font_size,
+                color=color,
+                stroke_color=stroke,
+                stroke_width=stroke_width,
+            )
+            
+            # Apply kinetic animation based on style
+            kinetic_style = style.get("kinetic_style", "pop")
+            if kinetic_style == "pop":
+                pop_scale = style.get("pop_scale", 1.3)
+                txt_clip = txt_clip.resized(lambda t: pop_scale - (pop_scale - 1.0) * (t / word_duration))
+            elif kinetic_style == "slide":
+                slide_dist = style.get("slide_distance", 50)
+                txt_clip = txt_clip.with_position(lambda t: (video_width // 2 - int(slide_dist * (1 - t/word_duration)), video_height * 0.8))
+            elif kinetic_style == "fade":
+                txt_clip = txt_clip.with_opacity(lambda t: min(1.0, t / (word_duration * 0.3)))
+            elif kinetic_style == "scale":
+                txt_clip = txt_clip.resized(lambda t: 1.0 + 0.1 * math.sin(math.pi * t / word_duration))
+            
+            txt_clip = txt_clip.with_start(start).with_duration(word_duration)
+            clips.append(txt_clip)
+            
+        except Exception as e:
+            logger.warning(f"Failed to create kinetic word clip: {e}")
+            continue
+    
+    if clips:
+        return CompositeVideoClip(clips, size=video_size)
+    return None
+
 
 class SubClippedVideoClip:
     def __init__(
