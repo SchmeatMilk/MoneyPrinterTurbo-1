@@ -282,6 +282,58 @@ Output and exit status:
         help="FFmpeg worker thread count, at least 1 (default: 2)",
     )
 
+    # Branding & visual effects group
+    branding_group = parser.add_argument_group("branding and visual effects")
+    branding_group.add_argument(
+        "--transition-mode",
+        type=str,
+        default=None,
+        choices=["none", "crossfade", "slide-left", "slide-right", "slide-up", "slide-down", "push", "zoom-in", "zoom-out"],
+        help="transition between source clips (default: from config.toml)",
+    )
+    branding_group.add_argument(
+        "--transition-duration",
+        type=_positive_float,
+        default=None,
+        help="transition duration in seconds (default: from config.toml)",
+    )
+    branding_group.add_argument(
+        "--intro-enabled",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="enable branded intro overlay (default: from config.toml)",
+    )
+    branding_group.add_argument(
+        "--outro-enabled",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="enable branded outro overlay with CTA (default: from config.toml)",
+    )
+    branding_group.add_argument(
+        "--watermark-enabled",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="enable logo watermark throughout video (default: from config.toml)",
+    )
+    branding_group.add_argument(
+        "--kinetic-enabled",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="enable kinetic typography (word-pop subtitles) (default: from config.toml)",
+    )
+    branding_group.add_argument(
+        "--kinetic-style",
+        default=None,
+        choices=["pop", "slide", "fade", "scale"],
+        help="kinetic typography animation style (default: from config.toml)",
+    )
+    branding_group.add_argument(
+        "--lut-enabled",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="enable LUT color grading (default: from config.toml)",
+    )
+
     audio_group = parser.add_argument_group("voiceover and background music")
     audio_group.add_argument(
         "--voice-name",
@@ -555,6 +607,15 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         "stroke_color",
         "stroke_width",
         "rounded_subtitle_background",
+        # New branding & visual effects args
+        "transition_mode",
+        "transition_duration",
+        "intro_enabled",
+        "outro_enabled",
+        "watermark_enabled",
+        "kinetic_enabled",
+        "kinetic_style",
+        "lut_enabled",
     ]
     for name in optional_arg_names:
         value = getattr(args, name)

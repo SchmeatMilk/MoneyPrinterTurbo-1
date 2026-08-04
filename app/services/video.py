@@ -90,6 +90,7 @@ class BrandingConfig:
         self.kinetic_enabled = branding.get("kinetic_enabled", True)
         self.kinetic_style = branding.get("kinetic_style", "pop")
         self.kinetic_pop_scale = float(branding.get("kinetic_pop_scale", 1.3))
+        self.watermark_enabled = branding.get("watermark_enabled", True)
         self.kinetic_slide_distance = int(branding.get("kinetic_slide_distance", 50))
 
 

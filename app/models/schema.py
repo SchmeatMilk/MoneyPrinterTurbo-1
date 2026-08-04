@@ -122,6 +122,16 @@ class VideoParams(BaseModel):
     video_script_prompt: str = Field(default="", max_length=2000)
     custom_system_prompt: str = Field(default="", max_length=8000)
 
+    # Branding & visual effects
+    transition_mode: Optional[str] = None  # crossfade, slide-left, slide-right, slide-up, slide-down, push, zoom-in, zoom-out, none
+    transition_duration: Optional[float] = None
+    intro_enabled: Optional[bool] = None
+    outro_enabled: Optional[bool] = None
+    watermark_enabled: Optional[bool] = None
+    kinetic_enabled: Optional[bool] = None
+    kinetic_style: Optional[str] = None  # pop, slide, fade, scale
+    lut_enabled: Optional[bool] = None
+
 
 class SubtitleRequest(BaseModel):
     video_script: str
