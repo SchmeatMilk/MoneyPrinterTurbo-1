@@ -128,8 +128,6 @@
 | Structured logging | 1 | JSON logs per task for debugging/analytics |
 | Git tracking for planning docs | All | Commit `.planning/` to repo (configurable) |
 
----
-
 ## Milestone Checkpoints
 
 | Milestone | Target Date | Criteria |
@@ -139,8 +137,6 @@
 | **M3: Content System** | 2026-08-18 | Phase 3 complete — A/B test run delivered |
 | **M4: Hands-Off Factory** | 2026-08-22 | Phase 4 complete — 2 weeks unattended runs |
 
----
-
 ## Resource Allocation
 
 | Resource | Phase 1 | Phase 2 | Phase 3 | Phase 4 |
@@ -148,8 +144,6 @@
 | Dev time (days) | 3-5 | 2-3 | 3-4 | 2-3 |
 | Tokens (est.) | High (research + code) | Medium | High (prompt engineering) | Low |
 | External deps | Whisper model (1.5 GB) | Upload-Post account | None | Cron/Telegram |
-
----
 
 ## Risk Register (Top 5)
 
@@ -160,7 +154,3 @@
 | Upload-Post API changes | 2 | Low | High | Abstract interface; version pin |
 | Hook/template quality | 3 | Medium | High | Curate from proven marketing frameworks |
 | Cron reliability | 4 | Medium | Medium | Health checks; alerts; manual override |
-
----
-
-*Last updated: 2026-08-04*

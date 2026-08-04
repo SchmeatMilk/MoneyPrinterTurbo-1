@@ -5,6 +5,18 @@
 
 ---
 
+## What This Is
+
+A GSD-managed upgrade project for the MoneyPrinterTurbo open-source video generator to produce marketing-grade 9:16 faceless videos for SmartSMB (TikTok/Reels/Shorts). The baseline pipeline works but has critical gaps: subtitle failures on branded terms, no visual polish, no auto-distribution, no systematic content optimization.
+
+---
+
+## Core Value
+
+Reliable, automated production of professional marketing videos at scale — subtitles that never fail, branding on every frame, smooth transitions, kinetic typography, color grading, and one-click distribution to social platforms. Turns a working prototype into a marketing asset factory.
+
+---
+
 ## Vision
 
 Upgrade the working MoneyPrinterTurbo pipeline into a **marketing-grade faceless video factory** for SmartSMB: reliable subtitles, professional visual quality, automated distribution, and systematic script optimization — producing 9:16 shorts ready for TikTok/Reels/Shorts at scale.
