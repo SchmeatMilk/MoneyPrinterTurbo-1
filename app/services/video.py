@@ -48,7 +48,8 @@ from app.utils import file_security, utils
 class BrandingConfig:
     """Branding configuration parsed from config.toml [branding] section."""
     def __init__(self):
-        branding = config.app.get("branding", {}) or {}
+        # branding is a top-level section in config.toml, not under [app]
+        branding = config._cfg.get("branding", {}) or {}
         
         # Logo watermark
         self.logo_path = branding.get("logo_path", "")
