@@ -355,15 +355,17 @@ def _apply_lut_to_clip(input_path: str, output_path: str, lut_path: str, intensi
     """Apply LUT color grading to video clip using FFmpeg."""
     if not lut_path or not os.path.exists(lut_path):
         return False
-    
+
     ffmpeg_binary = utils.get_ffmpeg_binary()
-    
+    # FFmpeg filter graph does not accept backslashes in file paths
+    lut_filter_path = lut_path.replace("\\", "/")
+
     if intensity >= 1.0:
         # Full LUT
         cmd = [
             ffmpeg_binary, "-y",
             "-i", input_path,
-            "-vf", f"lut3d=file={lut_path}",
+            "-vf", f"lut3d=file={lut_filter_path}",
             "-c:a", "copy",
             output_path
         ]
@@ -1126,6 +1128,21 @@ def combine_videos(
             clip_duration_saved = clip.duration
             close_clip(clip)
 
+            # Phase 1: apply LUT color grading to the temp clip if enabled
+            try:
+                _branding_lut = get_branding_config()
+                if _branding_lut.lut_enabled and _branding_lut.lut_path:
+                    _lut_output = f"{output_dir}/temp-clip-lut-{i+1}.mp4"
+                    if _apply_lut_to_clip(
+                        clip_file,
+                        _lut_output,
+                        _branding_lut.lut_path,
+                        _branding_lut.lut_intensity,
+                    ):
+                        os.replace(_lut_output, clip_file)
+            except Exception as exc:
+                logger.warning(f"LUT pass failed for clip {i+1}, continuing: {exc}")
+
             processed_clips.append(
                 SubClippedVideoClip(
                     file_path=clip_file,
@@ -1618,6 +1635,33 @@ def generate_video(
                 text_clips.append(clip)
             video_clip = CompositeVideoClip([video_clip, *text_clips])
             clip_stack.callback(video_clip.close)
+
+        # Phase 1: branding overlays (intro / outro / watermark)
+        try:
+            _branding = get_branding_config()
+            overlay_clips = []
+            if getattr(params, "intro_enabled", None) is True:
+                _intro_clip = _create_intro_clip(_branding, video_width, video_height)
+                if _intro_clip is not None:
+                    overlay_clips.append(_intro_clip)
+            if getattr(params, "outro_enabled", None) is True:
+                _outro_clip = _create_outro_clip(_branding, video_width, video_height)
+                if _outro_clip is not None:
+                    _outro_start = max(0.0, video_clip.duration - _branding.outro_duration)
+                    overlay_clips.append(_outro_clip.with_start(_outro_start))
+            if getattr(params, "watermark_enabled", None) is True:
+                _wm_clip = _create_watermark_clip(
+                    _branding, video_width, video_height, video_clip.duration
+                )
+                if _wm_clip is not None:
+                    overlay_clips.append(_wm_clip)
+            if overlay_clips:
+                video_clip = CompositeVideoClip(
+                    [video_clip, *overlay_clips], size=(video_width, video_height)
+                )
+                clip_stack.callback(video_clip.close)
+        except Exception as exc:
+            logger.warning(f"branding overlay failed, continuing without: {exc}")
 
         bgm_enabled = bgm_service.should_use_bgm(
             params.bgm_type, params.bgm_volume
