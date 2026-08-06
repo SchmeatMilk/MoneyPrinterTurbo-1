@@ -652,7 +652,7 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
 
 
 def generate_final_videos(
-    task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration
+    task_id, params, downloaded_videos, audio_file, subtitle_path, audio_duration, sub_maker=None
 ):
     final_video_paths = []
     combined_video_paths = []
@@ -727,13 +727,14 @@ def generate_final_videos(
 
         logger.info(f"\n\n## generating video: {index} => {final_video_path}")
         bgm_mix_succeeded = video.generate_video(
-            video_path=combined_video_path,
-            audio_path=audio_file,
-            subtitle_path=subtitle_path,
-            output_file=final_video_path,
-            params=params,
-            bgm_file_override=bgm_file_override,
-        )
+                    video_path=combined_video_path,
+                    audio_path=audio_file,
+                    subtitle_path=subtitle_path,
+                    output_file=final_video_path,
+                    params=params,
+                    bgm_file_override=bgm_file_override,
+                    sub_maker=sub_maker,
+                )
         if (
             video_music_provider is not None
             and bgm_file_override
@@ -1242,14 +1243,15 @@ def _run_pipeline(
         params.video_concat_mode = VideoConcatMode(params.video_concat_mode)
 
     # 6. Generate final videos
-    final_video_paths, combined_video_paths, generation_warnings = generate_final_videos(
-        task_id,
-        params,
-        downloaded_videos,
-        audio_file,
-        subtitle_path,
-        audio_duration,
-    )
+        final_video_paths, combined_video_paths, generation_warnings = generate_final_videos(
+            task_id,
+            params,
+            downloaded_videos,
+            audio_file,
+            subtitle_path,
+            audio_duration,
+            sub_maker,
+        )
 
     if not final_video_paths:
         return _mark_task_failed(

@@ -10,7 +10,7 @@ import unicodedata
 import math
 from contextlib import ExitStack, redirect_stdout
 from functools import lru_cache
-from typing import List
+from typing import List, Tuple
 from loguru import logger
 import numpy as np
 from moviepy import (
@@ -42,8 +42,118 @@ from app.services.utils import video_effects
 from app.utils import file_security, utils
 
 # =============================================================================
-# Branding Configuration
+# Scene Detection Integration
 # =============================================================================
+
+def detect_scenes_in_clip(
+    video_path: str,
+    threshold: float = 27.0,
+    min_scene_len: int = 15
+) -> List[Tuple[float, float]]:
+    """
+    Detect scene boundaries in a video clip using PySceneDetect.
+    Returns list of (start_time, end_time) in seconds.
+    Falls back to empty list if scenedetect unavailable or fails.
+    """
+    try:
+        from scenedetect import VideoManager, SceneManager, ContentDetector
+    except ImportError:
+        return []
+    
+    if not os.path.exists(video_path):
+        return []
+    
+    try:
+        from scenedetect import open_video, SceneManager, ContentDetector
+    except ImportError:
+        return []
+    
+    if not os.path.exists(video_path):
+        return []
+    
+    try:
+        video = open_video(video_path)
+        scene_manager = SceneManager()
+        scene_manager.add_detector(ContentDetector(threshold=threshold, min_scene_len=min_scene_len))
+        
+        scene_manager.detect_scenes(video)
+        scene_list = scene_manager.get_scene_list()
+        
+        scenes = []
+        for scene in scene_list:
+            start_time = scene[0].get_seconds()
+            end_time = scene[1].get_seconds()
+            scenes.append((start_time, end_time))
+        
+        return scenes
+    except Exception as e:
+        logger.debug(f"Scene detection failed for {video_path}: {e}")
+        return []
+
+
+def get_scene_aware_subclips(
+    video_path: str,
+    max_clip_duration: int,
+    required_remaining: float,
+    scene_threshold: float = 27.0
+) -> List[Tuple[float, float]]:
+    """
+    Get subclip boundaries using scene detection instead of fixed duration.
+    Falls back to fixed-duration chunks if scene detection fails.
+    """
+    scenes = detect_scenes_in_clip(video_path, threshold=scene_threshold)
+    
+    if not scenes:
+        # Fallback: fixed duration chunks
+        clip = _open_video_clip_quietly(video_path)
+        clip_duration = clip.duration
+        close_clip(clip)
+        
+        subclips = []
+        start = 0.0
+        while start < clip_duration and start < required_remaining:
+            end = min(start + max_clip_duration, clip_duration, start + required_remaining)
+            if end > start:
+                subclips.append((start, end))
+            start = end
+        return subclips
+    
+    # Use scene boundaries, but respect max_clip_duration and required_remaining
+    subclips = []
+    accumulated = 0.0
+    
+    for i, (scene_start, scene_end) in enumerate(scenes):
+        if accumulated >= required_remaining:
+            break
+        
+        scene_duration = scene_end - scene_start
+        
+        # If scene is too long, split it
+        if scene_duration > max_clip_duration:
+            # Split long scene into max_clip_duration chunks
+            chunk_start = scene_start
+            while chunk_start < scene_end and accumulated < required_remaining:
+                chunk_end = min(chunk_start + max_clip_duration, scene_end)
+                remaining = required_remaining - accumulated
+                if chunk_end - chunk_start > remaining:
+                    chunk_end = chunk_start + remaining
+                if chunk_end > chunk_start:
+                    subclips.append((chunk_start, chunk_end))
+                    accumulated += chunk_end - chunk_start
+                chunk_start = chunk_end
+        else:
+            # Use whole scene if it fits
+            remaining = required_remaining - accumulated
+            if scene_duration <= remaining:
+                subclips.append((scene_start, scene_end))
+                accumulated += scene_duration
+            else:
+                # Scene is longer than remaining needed
+                subclips.append((scene_start, scene_start + remaining))
+                accumulated += remaining
+                break
+    
+    return subclips
 
 class BrandingConfig:
     """Branding configuration parsed from config.toml [branding] section."""
@@ -426,7 +536,7 @@ def _create_kinetic_subtitles(sub_maker, video_size: tuple, style: dict) -> Comp
         
         try:
             txt_clip = TextClip(
-                word,
+                text=word,
                 font=font_path,
                 font_size=font_size,
                 color=color,
@@ -1008,15 +1118,17 @@ def combine_videos(
         clip_duration = clip.duration
         clip_w, clip_h = clip.size
         close_clip(clip)
-        
-        start_time = 0
 
-        while start_time < clip_duration:
-            end_time = min(start_time + source_clip_duration, clip_duration)
+        # Use scene-aware subclipping instead of fixed duration
+        remaining_needed = required_video_duration - video_duration
+        scene_subclips = get_scene_aware_subclips(
+            video_path=video_path,
+            max_clip_duration=int(source_clip_duration),
+            required_remaining=remaining_needed,
+            scene_threshold=27.0
+        )
 
-            # 保留所有有效分段。
-            # 这样既不会丢掉“整段视频本身就短于 max_clip_duration”的素材，
-            # 也不会吞掉长视频最后剩下的一小段尾部内容。
+        for start_time, end_time in scene_subclips:
             if end_time > start_time:
                 subclipped_items.append(
                     SubClippedVideoClip(
@@ -1029,9 +1141,8 @@ def combine_videos(
                     )
                 )
 
-            start_time = end_time
-            if video_concat_mode.value == VideoConcatMode.sequential.value:
-                break
+        if video_concat_mode.value == VideoConcatMode.sequential.value:
+            break
 
     subclipped_items = _prioritize_unique_source_clips(
         subclipped_items=subclipped_items,
@@ -1411,6 +1522,7 @@ def generate_video(
     output_file: str,
     params: VideoParams,
     bgm_file_override: str | None = None,
+    sub_maker=None,
 ) -> bool:
     """
     合成最终视频，并返回本次背景音乐处理是否成功。
@@ -1635,6 +1747,26 @@ def generate_video(
                 text_clips.append(clip)
             video_clip = CompositeVideoClip([video_clip, *text_clips])
             clip_stack.callback(video_clip.close)
+
+        # Phase 1b: kinetic word-level subtitles (if sub_maker available and kinetic enabled)
+        if sub_maker is not None and hasattr(sub_maker, "cues") and sub_maker.cues:
+            _branding = get_branding_config()
+            if _branding.kinetic_enabled:
+                kinetic_style = {
+                    "font_path": font_path,
+                    "font_size": params.font_size,
+                    "text_color": params.font_color if hasattr(params, "font_color") else "#FFFFFF",
+                    "stroke_color": params.stroke_color if hasattr(params, "stroke_color") else "#000000",
+                    "stroke_width": params.stroke_width if hasattr(params, "stroke_width") else 1.5,
+                    "kinetic_style": _branding.kinetic_style,
+                    "pop_scale": _branding.kinetic_pop_scale,
+                    "slide_distance": _branding.kinetic_slide_distance,
+                }
+                kinetic_subs = _create_kinetic_subtitles(sub_maker, (video_width, video_height), kinetic_style)
+                if kinetic_subs is not None:
+                    video_clip = CompositeVideoClip([video_clip, kinetic_subs], size=(video_width, video_height))
+                    clip_stack.callback(video_clip.close)
+                    logger.info("kinetic word-level subtitles applied")
 
         # Phase 1: branding overlays (intro / outro / watermark)
         try:
