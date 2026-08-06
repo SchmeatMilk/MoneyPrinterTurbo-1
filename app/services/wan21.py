@@ -20,8 +20,8 @@ from loguru import logger
 WAN_SPACE = "Wan-AI/Wan2.1"
 T2V_SIZE = "720*1280"  # 9:16 vertical (short-form)
 I2V_SIZE = "720*1280"
-POLL_INTERVAL = 25
-MAX_WAIT_SECONDS = 900  # 15 min hard cap per segment
+POLL_INTERVAL = 30
+MAX_WAIT_SECONDS = 1800  # 30 min hard cap per segment (free queue can be very slow)
 PROCESS_POLL_TIMEOUT = 120  # how long online_process_change may be polled
 
 

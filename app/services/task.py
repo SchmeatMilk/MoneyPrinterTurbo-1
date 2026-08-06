@@ -603,8 +603,10 @@ def get_video_materials(task_id, params, video_terms, audio_duration):
             return clips
         # fall through to the stock pipeline when generation fails
         logger.warning("Wan 2.1 clips unavailable; falling back to stock materials")
-        video_terms = video_terms or llm.generate_terms(
-            params.video_subject, params.video_script or "", amount=5
+        # use beat-relevant terms from the storyboard instead of generic ones —
+        # this keeps the script-to-visual match even without Wan 2.1
+        video_terms = video_terms or storyboard.storyboard_terms(
+            params.video_script or "", segment_count
         )
         if params.video_source == "storyboard":
             params.video_source = "pexels"
