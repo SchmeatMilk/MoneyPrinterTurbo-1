@@ -212,7 +212,7 @@ Output and exit status:
     material_group.add_argument(
         "--video-source",
         default="pexels",
-        choices=["pexels", "pixabay", "coverr", "local"],
+        choices=["pexels", "pixabay", "coverr", "local", "storyboard"],
         help="video material provider; online providers require matching API keys in config.toml",
     )
     material_group.add_argument(
@@ -224,6 +224,18 @@ Output and exit status:
             "paths use the current working directory, then storage/local_videos as a "
             "compatibility fallback; absolute paths are accepted"
         ),
+    )
+    material_group.add_argument(
+        "--storyboard-segments",
+        type=int,
+        default=None,
+        help="number of storyboard beats for --video-source storyboard (default: 5)",
+    )
+    material_group.add_argument(
+        "--storyboard-use-wan",
+        default=None,
+        action=argparse.BooleanOptionalAction,
+        help="generate clips with the free Wan 2.1 space; off falls back to stock terms (default: on)",
     )
     material_group.add_argument(
         "--stop-at",
@@ -616,6 +628,8 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         "kinetic_enabled",
         "kinetic_style",
         "lut_enabled",
+        "storyboard_segments",
+        "storyboard_use_wan",
     ]
     for name in optional_arg_names:
         value = getattr(args, name)

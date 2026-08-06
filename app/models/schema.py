@@ -131,6 +131,8 @@ class VideoParams(BaseModel):
     kinetic_enabled: Optional[bool] = None
     kinetic_style: Optional[str] = None  # pop, slide, fade, scale
     lut_enabled: Optional[bool] = None
+    storyboard_segments: Optional[int] = None
+    storyboard_use_wan: Optional[bool] = None
 
 
 class SubtitleRequest(BaseModel):

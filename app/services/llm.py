@@ -12,6 +12,21 @@ from app.config import config
 from app.models.llm_provider import DEFAULT_LLM_PROVIDER_ID, get_llm_provider
 
 _max_retries = 5
+
+MAX_STORYBOARD_SCRIPT_LENGTH = 3000
+
+
+def _limit_text(text: str, max_length: int) -> str:
+    """Truncate text to max_length characters, preserving sentence boundaries."""
+    text = str(text or "")
+    if len(text) <= max_length:
+        return text
+    cut = text[:max_length]
+    # cut at the last sentence boundary within the limit
+    last_boundary = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "), cut.rfind("\n"))
+    if last_boundary > max_length // 2:
+        cut = cut[: last_boundary + 1]
+    return cut
 MIN_SCRIPT_PARAGRAPH_NUMBER = 1
 MAX_SCRIPT_PARAGRAPH_NUMBER = 10
 MAX_SCRIPT_PROMPT_LENGTH = 2000
@@ -946,6 +961,108 @@ def generate_social_metadata(
 
     logger.warning("falling back to heuristic social metadata")
     return _fallback_social_metadata(video_subject, video_script, platform)
+
+
+# ---------------------------------------------------------------------------
+# Storyboard generation (Phase 1.5: per-beat visual prompts for Wan 2.1 / Pexels)
+# Ported and adapted from q1uki/MoneyPrinterAICreate (generate_outline).
+# ---------------------------------------------------------------------------
+
+def generate_storyboard(
+    video_script: str,
+    segment_count: int = 5,
+    duration_per_segment: int = 5,
+) -> dict:
+    """
+    Split a video script into a storyboard of visual prompts, one per segment.
+
+    Returns a dict like:
+        {"0": {"prompt": "...", "method": "t2v", "img": ""}, ...}
+
+    Each prompt is a detailed scene description (subject + modifiers + env +
+    camera) suitable for Wan 2.1 text-to-video or Pexels keyword search.
+    Falls back to sentence-based segmentation if the LLM fails.
+    """
+    video_script = _limit_text(video_script, MAX_STORYBOARD_SCRIPT_LENGTH)
+    segment_count = max(1, min(int(segment_count or 5), 10))
+    prompt = f"""You are a short-video director. Split the script below into {segment_count} segments of about {duration_per_segment} seconds each, and for every segment write one detailed video-generation prompt.
+
+SCRIPT:
+{video_script}
+
+RULES:
+1. Write exactly {segment_count} segments, numbered 0 to {segment_count - 1}.
+2. Each prompt must describe: the SUBJECT (main element), MODIFIERS (visual detail of the subject), ENVIRONMENT (setting), and CAMERA (shot type / motion). One flowing sentence.
+3. No text, letters, numbers or words may appear in the generated imagery — describe visuals only (simple patterns allowed).
+4. If a segment would need a specific starting image, set "method" to "i2v" and describe that image in "img"; otherwise "method": "t2v" and empty "img".
+5. Respond with ONLY a JSON object, no markdown, no extra text:
+{{"0": {{"prompt": "prompt text", "method": "t2v", "img": ""}}, "1": {{...}}}}
+
+Respond ONLY with the JSON object."""
+
+    response = ""
+    for i in range(_max_retries):
+        try:
+            response = _generate_response(prompt)
+            outline = _parse_storyboard_response(response)
+            if outline:
+                logger.success(f"storyboard: {len(outline)} segments")
+                return outline
+        except Exception as e:
+            logger.warning(f"failed to generate storyboard: {str(e)}")
+
+        if i < _max_retries - 1:
+            logger.warning(f"retrying storyboard generation... {i + 1}")
+
+    logger.warning("falling back to sentence-based storyboard")
+    return _fallback_storyboard(video_script, segment_count)
+
+
+def _parse_storyboard_response(response: str) -> dict:
+    """Parse the LLM's JSON storyboard response, tolerant of markdown fences."""
+    text = _strip_code_fence(str(response or ""))
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    if not match:
+        raise ValueError("no JSON object in storyboard response")
+    raw = json.loads(match.group(0))
+    outline = {}
+    for key, value in raw.items():
+        if not isinstance(value, dict):
+            continue
+        outline[str(key)] = {
+            "prompt": str(value.get("prompt", "")).strip(),
+            "method": "i2v" if value.get("method") == "i2v" else "t2v",
+            "img": str(value.get("img", "")).strip(),
+        }
+    if not outline:
+        raise ValueError("empty storyboard outline")
+    return outline
+
+
+def _fallback_storyboard(video_script: str, segment_count: int) -> dict:
+    """Heuristic storyboard: split script into sentences, one prompt each."""
+    sentences = [
+        s.strip()
+        for s in re.split(r"[.!?]+", video_script)
+        if s.strip()
+    ]
+    # pack sentences into segment_count buckets
+    buckets: list[list[str]] = [[] for _ in range(segment_count)]
+    for idx, sentence in enumerate(sentences):
+        buckets[idx % segment_count].append(sentence)
+
+    outline = {}
+    for i, bucket in enumerate(buckets):
+        summary = " ".join(bucket) or f"segment {i} of {video_script[:60]}"
+        outline[str(i)] = {
+            "prompt": (
+                f"cinematic establishing shot, {summary[:140]}, "
+                "professional lighting, shallow depth of field, 4k detail"
+            ),
+            "method": "t2v",
+            "img": "",
+        }
+    return outline
 
 
 if __name__ == "__main__":

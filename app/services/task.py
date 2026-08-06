@@ -20,6 +20,7 @@ from app.services import (
     llm,
     material,
     sonilo,
+    storyboard,
     subtitle,
     task_artifacts,
     twelvelabs,
@@ -587,6 +588,26 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
 
 
 def get_video_materials(task_id, params, video_terms, audio_duration):
+    if params.video_source == "storyboard":
+        logger.info("\n\n## generating storyboard-driven materials (free Wan 2.1)")
+        use_wan = params.storyboard_use_wan if params.storyboard_use_wan is not None else True
+        segment_count = params.storyboard_segments or 5
+        clips = storyboard.generate_storyboard_materials(
+            task_id=task_id,
+            video_script=params.video_script or "",
+            segment_count=segment_count,
+            use_wan=use_wan,
+        )
+        if clips:
+            logger.info(f"storyboard produced {len(clips)} generated clips")
+            return clips
+        # fall through to the stock pipeline when generation fails
+        logger.warning("Wan 2.1 clips unavailable; falling back to stock materials")
+        video_terms = video_terms or llm.generate_terms(
+            params.video_subject, params.video_script or "", amount=5
+        )
+        if params.video_source == "storyboard":
+            params.video_source = "pexels"
     if params.video_source == "local":
         logger.info("\n\n## preprocess local materials")
         materials = video.preprocess_video(
