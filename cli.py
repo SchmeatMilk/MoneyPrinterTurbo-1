@@ -238,6 +238,18 @@ Output and exit status:
         help="generate clips with the free Wan 2.1 space; off falls back to stock terms (default: on)",
     )
     material_group.add_argument(
+        "--storyboard-hybrid",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="hybrid mode: AI clips only for hook+cta beats, stock for body beats (default: off)",
+    )
+    material_group.add_argument(
+        "--beat-sync-enabled",
+        default=False,
+        action=argparse.BooleanOptionalAction,
+        help="snap cuts to audio onsets so scene changes land on the rhythm (default: off)",
+    )
+    material_group.add_argument(
         "--stop-at",
         default="video",
         choices=_PIPELINE_STAGES,
@@ -630,6 +642,8 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         "lut_enabled",
         "storyboard_segments",
         "storyboard_use_wan",
+        "storyboard_hybrid",
+        "beat_sync_enabled",
     ]
     for name in optional_arg_names:
         value = getattr(args, name)

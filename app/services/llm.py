@@ -995,8 +995,9 @@ RULES:
 2. Each prompt must describe: the SUBJECT (main element), MODIFIERS (visual detail of the subject), ENVIRONMENT (setting), and CAMERA (shot type / motion). One flowing sentence.
 3. No text, letters, numbers or words may appear in the generated imagery — describe visuals only (simple patterns allowed).
 4. If a segment would need a specific starting image, set "method" to "i2v" and describe that image in "img"; otherwise "method": "t2v" and empty "img".
-5. Respond with ONLY a JSON object, no markdown, no extra text:
-{{"0": {{"prompt": "prompt text", "method": "t2v", "img": ""}}, "1": {{...}}}}
+5. Tag every segment with a "role": the FIRST segment is the HOOK (high-attention, must grab the viewer in 1 second — bold motion, close-up, dramatic), the LAST segment is the CTA (call to action energy — product/brand moment, forward momentum), and all MIDDLE segments are "body" (explain the message). Set "role" to exactly one of: "hook", "body", "cta".
+6. Respond with ONLY a JSON object, no markdown, no extra text:
+{{"0": {{"prompt": "prompt text", "method": "t2v", "img": "", "role": "hook"}}, "1": {{...}}}}
 
 Respond ONLY with the JSON object."""
 
@@ -1033,6 +1034,9 @@ def _parse_storyboard_response(response: str) -> dict:
             "prompt": str(value.get("prompt", "")).strip(),
             "method": "i2v" if value.get("method") == "i2v" else "t2v",
             "img": str(value.get("img", "")).strip(),
+            "role": str(value.get("role", "")).strip().lower()
+            if value.get("role")
+            else "",
         }
     if not outline:
         raise ValueError("empty storyboard outline")
@@ -1054,6 +1058,13 @@ def _fallback_storyboard(video_script: str, segment_count: int) -> dict:
     outline = {}
     for i, bucket in enumerate(buckets):
         summary = " ".join(bucket) or f"segment {i} of {video_script[:60]}"
+        # deterministic roles: first = hook, last = cta, middle = body
+        if i == 0:
+            role = "hook"
+        elif i == segment_count - 1:
+            role = "cta"
+        else:
+            role = "body"
         outline[str(i)] = {
             "prompt": (
                 f"cinematic establishing shot, {summary[:140]}, "
@@ -1061,6 +1072,7 @@ def _fallback_storyboard(video_script: str, segment_count: int) -> dict:
             ),
             "method": "t2v",
             "img": "",
+            "role": role,
         }
     return outline
 

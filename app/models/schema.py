@@ -133,6 +133,8 @@ class VideoParams(BaseModel):
     lut_enabled: Optional[bool] = None
     storyboard_segments: Optional[int] = None
     storyboard_use_wan: Optional[bool] = None
+    storyboard_hybrid: Optional[bool] = None
+    beat_sync_enabled: Optional[bool] = None
 
 
 class SubtitleRequest(BaseModel):

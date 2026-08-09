@@ -587,7 +587,102 @@ def generate_subtitle(task_id, params, video_script, sub_maker, audio_file):
     return subtitle_path
 
 
+def _get_hybrid_video_materials(task_id, params, audio_duration):
+    """Hybrid materials: AI clips for hook+cta beats, stock for body beats.
+
+    The free Wan 2.1 space has a slow shared queue (10-30 min/clip), so
+    paying it for every beat makes interactive runs impractical. Hybrid
+    mode spends the queue only on the two highest-impact beats (hook and
+    cta) and fills the body with beat-relevant Pexels stock. Returns a
+    timeline of local video paths in storyboard order.
+    """
+    logger.info("\n\n## generating hybrid materials (AI hook/cta + stock body)")
+    segment_count = params.storyboard_segments or 5
+    use_wan = params.storyboard_use_wan if params.storyboard_use_wan is not None else True
+
+    if use_wan:
+        storyboard_sb, ai_clips = storyboard.hybrid_ai_beats(
+            task_id=task_id,
+            video_script=params.video_script or "",
+            segment_count=segment_count,
+        )
+    else:
+        # no-Wan mode: all beats use beat-relevant stock, timeline still built
+        # from storyboard order so the hybrid path stays uniform
+        logger.info("storyboard_use_wan=False; hybrid uses stock for all beats")
+        storyboard_sb = storyboard.generate_hybrid_storyboard(
+            video_script=params.video_script or "",
+            segment_count=segment_count,
+        )
+        ai_clips = []
+    if not storyboard_sb:
+        logger.warning("hybrid storyboard failed; falling back to stock pipeline")
+        params.video_source = "pexels"
+        return None
+
+    # beat-relevant terms for every segment (body beats will use them)
+    beat_terms = storyboard.hybrid_stock_terms(
+        storyboard_sb, params.video_script or "", segment_count
+    )
+
+    ai_beat_ids = {idx for idx, _ in ai_clips}
+    # download stock for the body beats in script order
+    body_terms = [t for i, t in enumerate(beat_terms) if i not in ai_beat_ids]
+    stock_clips = []
+    if body_terms:
+        logger.info(f"downloading stock for {len(body_terms)} body beats: {body_terms}")
+        stock_clips = material.download_videos(
+            task_id=task_id,
+            search_terms=body_terms,
+            source="pexels",
+            video_aspect=params.video_aspect,
+            video_concat_mode=VideoConcatMode.sequential,
+            audio_duration=audio_duration * params.video_count,
+            max_clip_duration=params.video_clip_duration,
+            match_script_order=True,
+        )
+        if not stock_clips:
+            logger.warning("stock download for body beats failed")
+    elif not ai_clips:
+        logger.warning("no AI clips and no body beats; falling back to stock pipeline")
+        params.video_source = "pexels"
+        return None
+
+    # interleave AI clips and stock clips back into beat order
+    timeline: list[str] = []
+    ai_by_beat = dict(ai_clips)
+    stock_iter = iter(stock_clips)
+    for idx in range(segment_count):
+        if idx in ai_by_beat:
+            timeline.append(ai_by_beat[idx])
+        else:
+            try:
+                timeline.append(next(stock_iter))
+            except StopIteration:
+                logger.warning(
+                    f"ran out of stock for beat {idx}; filling with first stock clip"
+                )
+                if stock_clips:
+                    timeline.append(stock_clips[0])
+
+    # safety: if a body beat has no stock at all, reuse the hook AI clip so the
+    # timeline never has a gap
+    if any(not c for c in timeline):
+        fallback = next((c for c in timeline if c), "")
+        timeline = [c or fallback for c in timeline]
+
+    if not timeline:
+        logger.warning("hybrid materials empty; falling back to stock pipeline")
+        params.video_source = "pexels"
+        return None
+
+    logger.info(f"hybrid timeline assembled: {len(timeline)} clips in beat order")
+    return timeline
+
+
 def get_video_materials(task_id, params, video_terms, audio_duration):
+    if params.video_source == "storyboard" and getattr(params, "storyboard_hybrid", False):
+        return _get_hybrid_video_materials(task_id, params, audio_duration)
     if params.video_source == "storyboard":
         logger.info("\n\n## generating storyboard-driven materials (free Wan 2.1)")
         use_wan = params.storyboard_use_wan if params.storyboard_use_wan is not None else True
@@ -689,6 +784,7 @@ def generate_final_videos(
             max_clip_duration=params.video_clip_duration,
             threads=params.n_threads,
             clip_speed=params.video_clip_speed,
+            beat_sync_audio=audio_file if getattr(params, "beat_sync_enabled", False) else "",
         )
 
         _progress += 50 / params.video_count / 2

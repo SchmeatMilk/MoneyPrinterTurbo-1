@@ -1076,6 +1076,7 @@ def combine_videos(
     max_clip_duration: int = 5,
     threads: int = 2,
     clip_speed: float = 1.0,
+    beat_sync_audio: str = "",
 ) -> str:
     audio_clip = AudioFileClip(audio_file)
     try:
@@ -1094,6 +1095,25 @@ def combine_videos(
 
     # 兼容 API 直接调用时未传转场模式的情况，避免后续访问 .value 时崩溃。
     transition_value = getattr(video_transition_mode, "value", video_transition_mode)
+
+    # Beat-synced editing: if a beat-sync audio track is provided, detect its
+    # onsets once and snap clip boundaries to them so cuts land on the rhythm.
+    beat_anchors: List[float] = []
+    if beat_sync_audio:
+        try:
+            from app.services import beat_sync
+
+            beat_anchors = beat_sync.detect_onsets(beat_sync_audio)
+            if beat_anchors:
+                logger.info(
+                    f"beat-synced editing: {len(beat_anchors)} onsets detected in "
+                    f"{os.path.basename(beat_sync_audio)}"
+                )
+            else:
+                logger.info("beat-synced editing: no onsets detected; using natural cuts")
+        except Exception as exc:
+            logger.warning(f"beat-sync setup failed, using natural cuts: {exc}")
+            beat_anchors = []
     normalized_clip_speed = utils.normalize_clip_speed(clip_speed)
     if normalized_clip_speed != 1.0:
         # 只记录一次最终生效值，既方便定位 API 越界参数被归一化的问题，
@@ -1224,7 +1244,24 @@ def combine_videos(
 
             if clip.duration > max_clip_duration:
                 clip = clip.subclipped(0, max_clip_duration)
-                
+
+            # Beat-synced editing: nudge this clip's duration so the cut
+            # boundary (video_duration + clip.duration) lands on the nearest
+            # onset within a small tolerance. Cuts far from any onset stay
+            # natural to avoid awkward jumps.
+            if beat_anchors:
+                boundary = video_duration + clip.duration
+                nearest = min(beat_anchors, key=lambda a: abs(a - boundary))
+                shift = nearest - boundary
+                if abs(shift) <= 0.4 and 1.0 <= (clip.duration + shift) <= max_clip_duration + 0.5:
+                    adjusted = clip.duration + shift
+                    if abs(shift) > 0.02:
+                        logger.debug(
+                            f"beat-sync: clip {i+1} boundary {boundary:.2f}s -> "
+                            f"{nearest:.2f}s (shift {shift:+.2f}s)"
+                        )
+                    clip = clip.subclipped(0, adjusted)
+
             # wirte clip to temp file
             clip_file = f"{output_dir}/temp-clip-{i+1}.mp4"
             _write_videofile_with_codec_fallback(
