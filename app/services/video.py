@@ -1248,13 +1248,19 @@ def combine_videos(
             # Beat-synced editing: nudge this clip's duration so the cut
             # boundary (video_duration + clip.duration) lands on the nearest
             # onset within a small tolerance. Cuts far from any onset stay
-            # natural to avoid awkward jumps.
+            # natural to avoid awkward jumps. Only SHORTEN toward the onset —
+            # we can't fabricate frames, so extending past the available
+            # source material (e.g. 5.00s source -> 5.06s target) would crash
+            # moviepy with "end_time > duration".
             if beat_anchors:
                 boundary = video_duration + clip.duration
                 nearest = min(beat_anchors, key=lambda a: abs(a - boundary))
                 shift = nearest - boundary
-                if abs(shift) <= 0.4 and 1.0 <= (clip.duration + shift) <= max_clip_duration + 0.5:
-                    adjusted = clip.duration + shift
+                adjusted = clip.duration + min(shift, 0.0)
+                if (
+                    abs(shift) <= 0.4
+                    and 1.0 <= adjusted < clip.duration
+                ):
                     if abs(shift) > 0.02:
                         logger.debug(
                             f"beat-sync: clip {i+1} boundary {boundary:.2f}s -> "
