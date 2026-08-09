@@ -512,6 +512,9 @@ def _create_kinetic_subtitles(sub_maker, video_size: tuple, style: dict) -> Comp
     text_color = style.get("text_color", "#FFFFFF")
     stroke_color = style.get("stroke_color", "#000000")
     stroke_width = style.get("stroke_width", 1.5)
+    highlight_color = style.get("highlight_color", "#00D4AA")
+    highlight_words = style.get("highlight_words") or set()
+    highlight_enabled = style.get("highlight_enabled", True)
     
     # Parse color
     def parse_color(c):
@@ -524,6 +527,7 @@ def _create_kinetic_subtitles(sub_maker, video_size: tuple, style: dict) -> Comp
     
     color = parse_color(text_color)
     stroke = parse_color(stroke_color)
+    highlight = parse_color(highlight_color)
     
     for cue in sub_maker.cues:
         word = unescape(cue.content)
@@ -534,13 +538,22 @@ def _create_kinetic_subtitles(sub_maker, video_size: tuple, style: dict) -> Comp
         if word_duration <= 0:
             continue
         
+        # word emphasis: render highlighted words in the accent color
+        word_color = color
+        word_stroke = stroke
+        if highlight_enabled and highlight_words:
+            key = word.strip().strip(".,!?;:'\"").lower()
+            if key in highlight_words:
+                word_color = highlight
+                word_stroke = (0, 0, 0)
+        
         try:
             txt_clip = TextClip(
                 text=word,
                 font=font_path,
                 font_size=font_size,
-                color=color,
-                stroke_color=stroke,
+                color=word_color,
+                stroke_color=word_stroke,
                 stroke_width=stroke_width,
             )
             
@@ -1795,6 +1808,19 @@ def generate_video(
         if sub_maker is not None and hasattr(sub_maker, "cues") and sub_maker.cues:
             _branding = get_branding_config()
             if _branding.kinetic_enabled:
+                try:
+                    from app.services import text_fx
+                    highlight_words = text_fx.get_highlight_words(
+                        getattr(params, "video_script", "") or "",
+                        getattr(params, "highlight_words", "") or "",
+                    )
+                    highlight_enabled = bool(
+                        getattr(params, "word_highlight_enabled", None)
+                        or text_fx.get_branding_style()["highlight_enabled"]
+                    )
+                except Exception:
+                    highlight_words = set()
+                    highlight_enabled = False
                 kinetic_style = {
                     "font_path": font_path,
                     "font_size": params.font_size,
@@ -1804,12 +1830,39 @@ def generate_video(
                     "kinetic_style": _branding.kinetic_style,
                     "pop_scale": _branding.kinetic_pop_scale,
                     "slide_distance": _branding.kinetic_slide_distance,
+                    "highlight_color": "#00D4AA",
+                    "highlight_words": highlight_words,
+                    "highlight_enabled": highlight_enabled,
                 }
                 kinetic_subs = _create_kinetic_subtitles(sub_maker, (video_width, video_height), kinetic_style)
                 if kinetic_subs is not None:
                     video_clip = CompositeVideoClip([video_clip, kinetic_subs], size=(video_width, video_height))
                     clip_stack.callback(video_clip.close)
-                    logger.info("kinetic word-level subtitles applied")
+                    logger.info(
+                        f"kinetic word-level subtitles applied "
+                        f"(highlight: {len(highlight_words)} words)"
+                    )
+
+        # Phase 1c: hook text overlay — big bold text for the first ~2 seconds
+        try:
+            from app.services import text_fx
+
+            hook_overlay = text_fx.build_hook_overlay(
+                video_script=getattr(params, "video_script", "") or "",
+                video_size=(video_width, video_height),
+                font_path=font_path,
+                hook_text=getattr(params, "hook_text", "") or "",
+            )
+            if hook_overlay is not None:
+                hook_duration = text_fx.get_branding_style()["hook_duration"]
+                hook_overlay = hook_overlay.with_start(0).with_duration(hook_duration)
+                video_clip = CompositeVideoClip(
+                    [video_clip, hook_overlay], size=(video_width, video_height)
+                )
+                clip_stack.callback(video_clip.close)
+                logger.info(f"hook text overlay applied ({hook_duration}s)")
+        except Exception as exc:
+            logger.warning(f"hook text overlay failed, continuing without: {exc}")
 
         # Phase 1: branding overlays (intro / outro / watermark)
         try:

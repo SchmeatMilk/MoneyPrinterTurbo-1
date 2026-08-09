@@ -250,6 +250,30 @@ Output and exit status:
         help="snap cuts to audio onsets so scene changes land on the rhythm (default: off)",
     )
     material_group.add_argument(
+        "--hook-text",
+        default=None,
+        type=str,
+        help="hook text overlay shown in the first seconds (default: auto from script)",
+    )
+    material_group.add_argument(
+        "--no-hook-text",
+        dest="hook_text_enabled",
+        action="store_false",
+        help="disable the hook text overlay",
+    )
+    material_group.add_argument(
+        "--highlight-words",
+        default=None,
+        type=str,
+        help="comma-separated words to emphasize in kinetic subtitles (accent color)",
+    )
+    material_group.add_argument(
+        "--no-word-highlight",
+        dest="word_highlight_enabled",
+        action="store_false",
+        help="disable word emphasis in kinetic subtitles",
+    )
+    material_group.add_argument(
         "--stop-at",
         default="video",
         choices=_PIPELINE_STAGES,
@@ -644,6 +668,10 @@ def build_video_params(args: argparse.Namespace) -> VideoParams:
         "storyboard_use_wan",
         "storyboard_hybrid",
         "beat_sync_enabled",
+        "hook_text",
+        "hook_text_enabled",
+        "highlight_words",
+        "word_highlight_enabled",
     ]
     for name in optional_arg_names:
         value = getattr(args, name)

@@ -135,6 +135,10 @@ class VideoParams(BaseModel):
     storyboard_use_wan: Optional[bool] = None
     storyboard_hybrid: Optional[bool] = None
     beat_sync_enabled: Optional[bool] = None
+    hook_text: Optional[str] = None
+    hook_text_enabled: Optional[bool] = None
+    highlight_words: Optional[str] = None
+    word_highlight_enabled: Optional[bool] = None
 
 
 class SubtitleRequest(BaseModel):
